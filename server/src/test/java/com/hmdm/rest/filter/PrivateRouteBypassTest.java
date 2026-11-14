@@ -235,6 +235,48 @@ public class PrivateRouteBypassTest {
         }
     }
 
+
+    @Path("/private/agent/v1")
+    public static class TelemetryFixture {
+        @GET
+        @Path("/devices/{deviceId}/telemetry")
+        public String telemetry() {
+            return "synthetic-telemetry";
+        }
+    }
+
+    @Test
+    public void telemetryPrivateRouteRequiresSignedInUser() throws Exception {
+        ApplicationHandler app = new ApplicationHandler(
+                new ResourceConfig(TelemetryFixture.class, PrivateRouteGuard.class));
+
+        String[] paths = {
+                "private/agent/v1/devices/test-device/telemetry",
+                "private;x=y/agent/v1/devices/test-device/telemetry"
+        };
+
+        SecurityContext.release();
+        for (String path : paths) {
+            assertEquals(path, 403, get(app, path).getStatus());
+        }
+
+        SecurityContext.init(1);
+        try {
+            for (String path : paths) {
+                assertEquals(path, 403, get(app, path).getStatus());
+            }
+        } finally {
+            SecurityContext.release();
+        }
+
+        SecurityContext.init(user());
+        try {
+            assertEquals(200, get(app, paths[0]).getStatus());
+        } finally {
+            SecurityContext.release();
+        }
+    }
+
     // ---- helpers ----------------------------------------------------------------------------------------------------
 
     private static final class Outcome {
