@@ -68,6 +68,9 @@ public class AgentDeviceAccessTest {
     private RolloutResource rollouts;
     private Map<Class<?>, Object> deps;
     private int configurationReads;
+    private int telemetryReads;
+    private String telemetryJson =
+            "{\"identity\":{\"iccid\":[\"8900000000000000000\"]}}";
 
     private static Device device(int id, String number) {
         Device d = new Device();
@@ -109,7 +112,12 @@ public class AgentDeviceAccessTest {
         };
         AgentCommandDAO commandDAO = new AgentCommandDAO(null, null, null, null) {
             @Override public void insert(AgentCommand c) { sideEffects.add("insert " + c.getDeviceNumber()); }
-            @Override public DeviceState getState(String n) { return new DeviceState(); }
+            @Override public DeviceState getState(String n) {
+                telemetryReads++;
+                DeviceState state = new DeviceState();
+                state.setTelemetry(telemetryJson);
+                return state;
+            }
             @Override public List listEvents(String n, long s, int l) { return new ArrayList<>(); }
             @Override public List<AgentCommand> listHistory(String n, long s, int l) { return new ArrayList<>(); }
             @Override public List listLocations(String n, long s, int l) { return new ArrayList<>(); }
@@ -290,6 +298,76 @@ public class AgentDeviceAccessTest {
         cmd.setType("config.apply");
         assertEquals("error.agent.command.serverOwned", resource.queueCommand(HIDDEN, cmd).getMessage());
         assertEquals("nothing queued or woken", Collections.emptyList(), sideEffects);
+    }
+
+    @Test
+    public void telemetryReturnsSyntheticIccidForAuthorizedDevice() {
+        Response response = resource.getTelemetry(VISIBLE);
+
+        assertEquals(Response.ResponseStatus.OK, response.getStatus());
+        com.fasterxml.jackson.databind.JsonNode data =
+                (com.fasterxml.jackson.databind.JsonNode) response.getData();
+        assertEquals("8900000000000000000",
+                data.path("identity").path("iccid").get(0).asText());
+        assertEquals(1, telemetryReads);
+    }
+
+    @Test
+    public void telemetryDeniesRestrictedDeviceBeforeReadingState() {
+        Response response = resource.getTelemetry(HIDDEN);
+
+        assertEquals(Response.PERMISSION_DENIED().getMessage(),
+                response.getMessage());
+        assertEquals(0, telemetryReads);
+    }
+
+    @Test
+    public void telemetryDeniesOtherTenantBeforeReadingState() {
+        Device other = device(3, "OTHER-TENANT");
+        other.setCustomerId(2);
+        devices.put(other.getNumber(), other);
+
+        login(true);
+        Response response = resource.getTelemetry(other.getNumber());
+
+        assertEquals(Response.PERMISSION_DENIED().getMessage(),
+                response.getMessage());
+        assertEquals(0, telemetryReads);
+    }
+
+    @Test
+    public void telemetryAllowsReadOnlyUserForAssignedDevice() {
+        User observer = Fakes.user(9, CUSTOMER, "devices");
+        observer.setAllDevicesAvailable(false);
+        login(observer);
+
+        Response response = resource.getTelemetry(VISIBLE);
+
+        assertEquals(Response.ResponseStatus.OK, response.getStatus());
+        assertEquals(1, telemetryReads);
+    }
+
+    @Test
+    public void telemetryRejectsMissingUserContext() {
+        SecurityContext.release();
+        SecurityContext.init(CUSTOMER);
+
+        Response response = resource.getTelemetry(VISIBLE);
+
+        assertEquals(Response.PERMISSION_DENIED().getMessage(),
+                response.getMessage());
+        assertEquals(0, telemetryReads);
+    }
+
+    @Test
+    public void malformedTelemetryDoesNotExposeRawData() {
+        telemetryJson = "{invalid-json";
+
+        Response response = resource.getTelemetry(VISIBLE);
+
+        assertEquals(Response.ResponseStatus.OK, response.getStatus());
+        assertEquals(null, response.getData());
+        assertEquals(1, telemetryReads);
     }
 
     @Test
