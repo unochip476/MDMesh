@@ -65,6 +65,7 @@ public interface DeviceMapper {
     @Select({"SELECT COUNT(*) > 0 FROM devices " +
             "INNER JOIN users ON users.id = #{userId} " +
             "WHERE devices.id = #{deviceId} AND devices.customerId = #{customerId} " +
+            "AND users.customerId = #{customerId} " +
             "AND " + USER_DEVICE_ACCESS})
     boolean isDeviceAccessibleToUser(@Param("deviceId") int deviceId,
                                      @Param("userId") int userId,
@@ -73,6 +74,7 @@ public interface DeviceMapper {
     @Select({"SELECT devices.number FROM devices " +
             "INNER JOIN users ON users.id = #{userId} " +
             "WHERE devices.customerId = #{customerId} " +
+            "AND users.customerId = #{customerId} " +
             "AND " + USER_DEVICE_ACCESS})
     List<String> getDeviceNumbersAccessibleToUser(@Param("userId") int userId,
                                                   @Param("customerId") int customerId);
