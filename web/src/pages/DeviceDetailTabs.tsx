@@ -85,6 +85,25 @@ function duration(ms: number): string {
 
 const CHARGING: Record<string, string> = { none: 'Not charging', ac: 'Charging (AC)', usb: 'Charging (USB)', wireless: 'Charging (wireless)' };
 
+function simDetails(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+
+  return value.map((entry, index) => {
+    const sim = teleObj(entry);
+    const slot = typeof sim.slotIndex === 'number'
+      && sim.slotIndex >= 0
+      ? `Slot ${sim.slotIndex + 1}`
+      : `SIM ${index + 1}`;
+    const carrier = teleStr(sim.carrierName) || 'Operatore sconosciuto';
+    const kind = sim.embedded === true
+      ? 'eSIM'
+      : sim.embedded === false ? 'SIM fisica' : 'Tipo sconosciuto';
+    const iccid = teleStr(sim.iccid) || 'Non disponibile';
+
+    return `${slot} · ${carrier} · ${kind} · ICCID: ${iccid}`;
+  }).join(' | ');
+}
+
 const GROUPS: Array<{ title: string; rows: RowSpec[] }> = [
   {
     title: 'Hardware',
@@ -208,6 +227,12 @@ const GROUPS: Array<{ title: string; rows: RowSpec[] }> = [
       { label: 'IMEI', keys: [['identity', 'imei']], render: (s) => list(s.identity.imei), mono: true },
       { label: 'IMSI', keys: [['identity', 'imsi']], render: (s) => list(s.identity.imsi), mono: true },
       { label: 'ICCID', keys: [['identity', 'iccid']], render: (s) => list(s.identity.iccid), mono: true },
+      {
+        label: 'Dettagli SIM',
+        keys: [['identity', 'simSubscriptions']],
+        render: (s) => simDetails(s.identity.simSubscriptions),
+        mono: true,
+      },
       { label: 'Phone number', keys: [['identity', 'phoneNumber']], render: (s) => list(s.identity.phoneNumber), mono: true },
     ],
   },

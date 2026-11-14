@@ -38,6 +38,17 @@ data class IdentityInfo(
     val imsi: List<String> = emptyList(),
     val iccid: List<String> = emptyList(),
     val phoneNumber: List<String> = emptyList(),
+    /** Active subscriptions only; no IMEI-slot linkage guarantee. */
+    val simSubscriptions: List<SimSubscriptionInfo> = emptyList(),
+)
+
+@Serializable
+data class SimSubscriptionInfo(
+    val iccid: String? = null,
+    val slotIndex: Int? = null,
+    val subscriptionId: Int? = null,
+    val embedded: Boolean? = null,
+    val carrierName: String? = null,
 )
 
 @Serializable

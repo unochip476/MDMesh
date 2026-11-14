@@ -14,6 +14,7 @@ import javax.inject.Singleton
 @Singleton
 class IdentityCollector @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val simIccidCollector: SimIccidCollector,
 ) {
     @SuppressLint("HardwareIds", "MissingPermission")
     fun collect(): IdentityInfo {
@@ -37,11 +38,19 @@ class IdentityCollector @Inject constructor(
         val serial = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Build.getSerial() else @Suppress("DEPRECATION") Build.SERIAL
         }.getOrNull()?.takeIf { it.isNotBlank() && it != Build.UNKNOWN }
+        val sims = runCatching { simIccidCollector.collect() }.getOrDefault(emptyList())
         return IdentityInfo(
             serial = serial,
             imei = imei.distinct(),
             imsi = emptyList(), // IMSI/subscriberId restricted; left empty unless a privileged path is added
-            iccid = emptyList(),
+            iccid = sims.mapNotNull { it.iccid }.distinct(),
+            simSubscriptions = sims.map { com.mdmesh.proto.SimSubscriptionInfo(
+                iccid = it.iccid,
+                slotIndex = it.slotIndex,
+                subscriptionId = it.subscriptionId,
+                embedded = it.embedded,
+                carrierName = it.carrierName,
+            ) },
             phoneNumber = phones.distinct(),
         )
     }
