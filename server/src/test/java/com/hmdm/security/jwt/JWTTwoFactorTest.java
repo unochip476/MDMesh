@@ -199,6 +199,217 @@ public class JWTTwoFactorTest {
         assertEquals("plain", result.chainUsers.get(0).getLogin());
     }
 
+
+    @Test
+    public void missingCredentialsAreRejectedByAuthFilterAfterJwtFilter() throws Exception {
+        final int[] status = {0};
+        final int[] reachedResource = {0};
+
+        HttpServletRequest request = (HttpServletRequest) Proxy.newProxyInstance(
+                HttpServletRequest.class.getClassLoader(),
+                new Class<?>[]{HttpServletRequest.class},
+                (proxy, method, args) -> {
+                    if ("getHeader".equals(method.getName())) return null;
+                    if ("getSession".equals(method.getName())) return null;
+                    if ("getServletPath".equals(method.getName()))
+                        return "/rest/private/agent/v1/devices/test/telemetry";
+                    return null;
+                });
+
+        HttpServletResponse response = (HttpServletResponse) Proxy.newProxyInstance(
+                HttpServletResponse.class.getClassLoader(),
+                new Class<?>[]{HttpServletResponse.class},
+                (proxy, method, args) -> {
+                    if ("sendError".equals(method.getName())) {
+                        status[0] = (Integer) args[0];
+                    }
+                    return null;
+                });
+
+        com.hmdm.rest.filter.AuthFilter auth =
+                new com.hmdm.rest.filter.AuthFilter();
+
+        FilterChain endpoint = (req, res) -> reachedResource[0]++;
+
+        FilterChain afterJwt = (req, res) ->
+                auth.doFilter(req, res, endpoint);
+
+        SecurityContext.release();
+        new JWTFilter(tokenProvider, unsecureDAO)
+                .doFilter(request, response, afterJwt);
+
+        assertEquals(403, status[0]);
+        assertEquals(0, reachedResource[0]);
+        assertTrue(SecurityContext.get() == null ||
+                !SecurityContext.get().getCurrentUser().isPresent());
+    }
+
+
+    @Test
+    public void validJwtPassesThroughBothAuthenticationFilters() throws Exception {
+        String token = tokenProvider.createToken(users.get("plain"), false);
+        assertAuthenticationChain(token, null, 1, "plain");
+    }
+
+    @Test
+    public void invalidJwtWithoutSessionIsRejected() throws Exception {
+        assertAuthenticationChain("invalid-token", 403, 0, null);
+    }
+
+    private void assertAuthenticationChain(String token, Integer expectedError,
+                                           int expectedCalls, String expectedLogin)
+            throws Exception {
+        final int[] error = {0};
+        final int[] calls = {0};
+
+        HttpServletRequest request = (HttpServletRequest) Proxy.newProxyInstance(
+                HttpServletRequest.class.getClassLoader(),
+                new Class<?>[]{HttpServletRequest.class},
+                (proxy, method, args) -> {
+                    if ("getHeader".equals(method.getName())) {
+                        return "Authorization".equals(args[0])
+                                ? "Bearer " + token : null;
+                    }
+                    if ("getSession".equals(method.getName())) return null;
+                    if ("getServletPath".equals(method.getName()))
+                        return "/rest/private/agent/v1/devices/test/telemetry";
+                    return null;
+                });
+
+        HttpServletResponse response = (HttpServletResponse) Proxy.newProxyInstance(
+                HttpServletResponse.class.getClassLoader(),
+                new Class<?>[]{HttpServletResponse.class},
+                (proxy, method, args) -> {
+                    if ("sendError".equals(method.getName())) {
+                        error[0] = (Integer) args[0];
+                    }
+                    return null;
+                });
+
+        com.hmdm.rest.filter.AuthFilter auth =
+                new com.hmdm.rest.filter.AuthFilter();
+
+        FilterChain endpoint = (req, res) -> {
+            calls[0]++;
+            assertEquals(expectedLogin,
+                    SecurityContext.get().getCurrentUser().get().getLogin());
+        };
+
+        FilterChain afterJwt = (req, res) ->
+                auth.doFilter(req, res, endpoint);
+
+        SecurityContext.release();
+        new JWTFilter(tokenProvider, unsecureDAO)
+                .doFilter(request, response, afterJwt);
+
+        assertEquals(expectedCalls, calls[0]);
+        assertEquals(expectedError == null ? 0 : expectedError.intValue(),
+                error[0]);
+        assertTrue(SecurityContext.get() == null ||
+                !SecurityContext.get().getCurrentUser().isPresent());
+    }
+
+
+    @Test
+    public void revokedJwtIsRejectedBeforeReachingResource() throws Exception {
+        User user = users.get("plain");
+        String revokedToken = tokenProvider.createToken(user, false);
+
+        user.setAuthToken("rotated-test-token");
+
+        assertAuthenticationChain(revokedToken, 403, 0, null);
+    }
+
+    @Test
+    public void validSessionPassesThroughBothAuthenticationFilters()
+            throws Exception {
+        assertSessionAuthenticationChain(false, 0, 1);
+    }
+
+    @Test
+    public void expiredSessionIsRejectedBeforeReachingResource()
+            throws Exception {
+        assertSessionAuthenticationChain(true, 403, 0);
+    }
+
+    private void assertSessionAuthenticationChain(
+            boolean expired, int expectedStatus, int expectedCalls)
+            throws Exception {
+
+        com.hmdm.testsupport.FakeSessions sessions =
+                new com.hmdm.testsupport.FakeSessions();
+
+        com.hmdm.testsupport.FakeSessions.Session session =
+                sessions.existing("synthetic-session");
+
+        session.attributes.put(
+                com.hmdm.rest.filter.AuthFilter.sessionCredentials,
+                users.get("plain"));
+
+        if (expired) {
+            session.invalidated = true;
+        }
+
+        com.hmdm.persistence.UserDAO userDAO =
+                new com.hmdm.persistence.UserDAO(null, 2) {
+                    @Override
+                    public User getUserDetails(int id) {
+                        return copy(users.get("plain"));
+                    }
+                };
+
+        HttpServletRequest request = (HttpServletRequest)
+                Proxy.newProxyInstance(
+                    HttpServletRequest.class.getClassLoader(),
+                    new Class<?>[]{HttpServletRequest.class},
+                    (proxy, method, args) -> {
+                        if ("getHeader".equals(method.getName()))
+                            return null;
+                        if ("getSession".equals(method.getName()))
+                            return sessions.getSession(args);
+                        if ("getServletPath".equals(method.getName()))
+                            return "/rest/private/agent/v1/devices/test/telemetry";
+                        return null;
+                    });
+
+        final int[] status = {0};
+        final int[] calls = {0};
+
+        HttpServletResponse response = (HttpServletResponse)
+                Proxy.newProxyInstance(
+                    HttpServletResponse.class.getClassLoader(),
+                    new Class<?>[]{HttpServletResponse.class},
+                    (proxy, method, args) -> {
+                        if ("sendError".equals(method.getName()))
+                            status[0] = (Integer) args[0];
+                        return null;
+                    });
+
+        com.hmdm.rest.filter.AuthFilter auth =
+                new com.hmdm.rest.filter.AuthFilter(userDAO);
+
+        FilterChain endpoint = (req, res) -> {
+            calls[0]++;
+            assertEquals("plain",
+                    SecurityContext.get().getCurrentUser()
+                            .get().getLogin());
+        };
+
+        FilterChain afterJwt = (req, res) ->
+                auth.doFilter(req, res, endpoint);
+
+        SecurityContext.release();
+        try {
+            new JWTFilter(tokenProvider, unsecureDAO)
+                    .doFilter(request, response, afterJwt);
+
+            assertEquals(expectedStatus, status[0]);
+            assertEquals(expectedCalls, calls[0]);
+        } finally {
+            SecurityContext.release();
+        }
+    }
+
     // ---- helpers -----------------------------------------------------------------------------------------------------
 
     private Response login(String login, String passwordMd5) {
